@@ -11,9 +11,11 @@
 #				limit 	  = Limit to only x sequences per family (optional)
 #
 use strict;
+use LWP;
 use LWP::Simple;
 use Data::Dumper;
 use Bio::DB::EUtilities;
+use Term::ProgressBar;
 
 
 #
@@ -92,6 +94,7 @@ foreach my $family (@rfam_families) {
 	print "\n\nRetrieving $mode alignments from RFAM\n========================\n";
 	my %rfam_result;
 	my $count = 0;
+	my $exist_count = 0;
 	my $rfam_url = get ("http://rfam.sanger.ac.uk/family/$family/alignment/$mode/stockholm?alnType=$mode&nseLabels=0&cs=0");
 	if ($rfam_url) {
 		##=GS C.diphtheriae.1         AC    BX248356.1/172244-172444
@@ -103,14 +106,27 @@ foreach my $family (@rfam_families) {
 			} else {
 				$polarity = "+";
 			}
+			#Duplicate key fix
 			push ( @locs, $polarity);
-			$rfam_result{$1} = \@locs;
+			if ($rfam_result{$1}){
+				#print "$1 exists already, adding to to existing key";
+				my @sub_result = [ @locs ];
+				push( @{ $rfam_result{$1}}, @sub_result); 
+				$exist_count++;
+			} else {
+				my @sub_result = [@locs];
+				$rfam_result{$1} = [@sub_result];
+			}
 			$count++;
 		}
+	} else {
+		print "$family Get Failed\n";
+		sleep 10;
+		$rfam_families_count--;
+		next;
+
 	}
-	print "Found $count Genes from RFAM for $family family\n";
-
-
+	print "Found $count Genes from RFAM for $family family.\n";
 
 	#
 	#
@@ -118,7 +134,7 @@ foreach my $family (@rfam_families) {
 	# (Adapted from BioPerl documentation)
 	#
 	my @ids = keys (%rfam_result);
- 
+ 	print "IDS ".scalar(@ids)."\n";
 	my $factory = Bio::DB::EUtilities->new(-eutil   => 'efetch',
                                        -db      => 'nuccore',
                                        -id      => \@ids,
@@ -130,7 +146,7 @@ foreach my $family (@rfam_families) {
 	foreach my $genes (@gis) {
 		
 	}
- 
+
 	#
 	#
 	#	NCBI
@@ -139,39 +155,38 @@ foreach my $family (@rfam_families) {
 	#NCBI FASTA eghttp://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nucleotide&id=BX248356.1&rettype=fasta
 	#Get the full sequence from the start location
 	print "\n\nRetrieving sequences from NCBI for $family \n========================\n\r";
-	my (%ncbi_result,@ncbi_result_fail);
-	my $result_count = 0;
-	my $fail_count = 0;
-	my $time_start = time();
-	foreach my $keys (keys(%rfam_result)){
-		my $start = $rfam_result{$keys}[0];
-		my $ncbi_url = get ("http://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=$keys&strand=1&seq_start=$start&rettype=fasta&retmode=text");
-		if (defined($ncbi_url)){
-			print "$keys(Success)\t $count remaining\t\r";
-			$ncbi_url =~ s/^>*.+\n//;
-			$ncbi_url =~ s/\n//g;
-			$ncbi_result{$keys} = $ncbi_url;
-			$result_count++;
-		} else {
-			print "$keys(Fail)\t $count remaining\t\r";
-			push (@ncbi_result_fail, $keys);
-			$fail_count++;
-		}
-		$count--;
-		#Rate limting
-		unless ($result_count % $rate_limit) {
-			print "--Sleeping for $rate_limit s--\r";
-			sleep $rate_limit;
-		}
-		if (defined($limit) and $limit > 0){
-			if ($result_count >= $limit) {
+	my $fetch_batch = 100;
+	my $gi_no = scalar(@gis);
+	my $g_count = 0;
+	for (my $i = 0; $i < $gi_no; $i += $fetch_batch) {
+		my @get_ids;
+		for (my $j = 0; $j < $fetch_batch; $j++) {
+			if (@gis) {
+				push (@get_ids, pop(@gis));
+				$g_count++;
+			} else {
 				last;
 			}
 		}
+		my $fetch_url = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&rettype=fasta&id=";
+		$fetch_url .= join (",", @get_ids);
+		
+		#die($fetch_url);
+		my $get_fetch_url = get($fetch_url);
+		if ($get_fetch_url) {
+			open (SEQS, ">", "../output/raw/$family.txt") or die "Can't create output file\n";
+			print SEQS ">>First 100\n";
+			print SEQS $get_fetch_url;
+			close SEQS or die "Can't close output file\n";
+		} else {
+			print "Error getting the sequences\n";
+		}
 	}
-	my $time_stop = time();
-	my $duration = $time_stop - $time_start;
-	print "\n\nGot $result_count sequences in $duration seconds. $fail_count failed attemtps.\n";
+		my (%ncbi_result,@ncbi_result_fail,$duration);
+	my $result_count = 0;
+	my $fail_count = 0;
+	
+	#print "\n\nGot result_count sequences in $duration seconds. $fail_count failed attemtps.\n";
 
 	#
 	#
@@ -211,7 +226,7 @@ foreach my $family (@rfam_families) {
 	#
 	#Output the results to a file
 	print "\n\nOutputting sequences \n========================\n";
-	open (OUTPUT, ">", "../output/$family.txt") or die "Can't create output file\n";
+	open (OUTPUT, ">", "../output/processed/$family.txt") or die "Can't create output file\n";
 	foreach my $keys (keys(%processed_results)){
 		print OUTPUT ">$keys\n$processed_results{$keys}\n";
 	}
