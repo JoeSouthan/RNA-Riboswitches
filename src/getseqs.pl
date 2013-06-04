@@ -13,6 +13,8 @@
 use strict;
 use LWP::Simple;
 use Data::Dumper;
+use Bio::DB::EUtilities;
+
 
 #
 #
@@ -108,6 +110,27 @@ foreach my $family (@rfam_families) {
 	}
 	print "Found $count Genes from RFAM for $family family\n";
 
+
+
+	#
+	#
+	# Convert and retrieve NCBI sequences
+	# (Adapted from BioPerl documentation)
+	#
+	my @ids = keys (%rfam_result);
+ 
+	my $factory = Bio::DB::EUtilities->new(-eutil   => 'efetch',
+                                       -db      => 'nuccore',
+                                       -id      => \@ids,
+                                       -email   => 'joseph@southanuk.co.uk',
+                                       -rettype => 'gi');
+ 
+	my @gis = split(m{\n},$factory->get_Response->content);
+
+	foreach my $genes (@gis) {
+		
+	}
+ 
 	#
 	#
 	#	NCBI
