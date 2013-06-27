@@ -1,6 +1,6 @@
 
 src/output.txt
-output/*.txt
+/output/
 #################
 ## Eclipse
 #################

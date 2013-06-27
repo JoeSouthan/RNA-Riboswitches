@@ -4,18 +4,17 @@
 # Created by: Joseph Southan
 # Date: 23/5/13
 # Description: - Retrieves DNA/RNA sequences from RFAM
-# Usage: getseqs.pl [seed/full] [text file] [Rate limit] (Limit)
+# Usage: getseqs.pl [seed/full] [text file]
 #				Seed/Full = To get the full aligment file or just the seeds (Default: seed)
 #				Text file = File containing RFAM families with each one on a newline
-#				Rate limit= Limit the script to fetch x number of sequences at a time (Default: 10 seconds)
-#				limit 	  = Limit to only x sequences per family (optional)
 #
 use strict;
-use LWP;
 use LWP::Simple;
 use Data::Dumper;
+use Bio::SeqIO;
 use Bio::DB::EUtilities;
-use Term::ProgressBar;
+use LWP::UserAgent;
+use File::Path qw(make_path remove_tree);
 
 
 #
@@ -28,9 +27,7 @@ my ($mode, $limit, $search_file, $rate_limit, @rfam_families);
 #Turn off buffer for status messages
 $|=1;
 #Check for params
-unless (@ARGV) {
-	die ("\n========================\nError: Please ensure to have the correct arguments\n========================\n");
-}
+die ("\n========================\nError: Please ensure to have the correct arguments\n========================\n") unless (@ARGV);
 #Default to seed
 unless ($ARGV[0] eq "seed" or $ARGV[0] eq "full") {
 	$mode = "seed";
@@ -49,16 +46,6 @@ unless (defined($ARGV[1])) {
 		push (@rfam_families, $line);
 	}
 	close (SEARCHES) or die ("Can't close search file.\n");
-}
-#Rate limiting to keep us friendly with API providers
-unless (defined($ARGV[2])) {
-	$rate_limit = 10;
-} else {
-	$rate_limit = $ARGV[2];
-}
-#If only x sequences per family are required set a limit
-if (defined($ARGV[3])) {
-	$limit = $ARGV[3];
 }
 #Warn the user
 if ($mode eq "full"){
@@ -79,11 +66,7 @@ if ($mode eq "full"){
 my $rfam_families_count = scalar(@rfam_families);
 foreach my $family (@rfam_families) {
 	system("cls");
-	unless (defined($limit)) {
-		print "\n========================\nFamily: $family $rfam_families_count remain(s).\nSequences at a time: $rate_limit\n========================\n";
-	} else {
-		print "\n========================\nFamily: $family $rfam_families_count remain(s).\nSequences at a time: $rate_limit Limit: $limit\n========================\n";
-	}
+	print "\n========================\nFamily: $family $rfam_families_count remain(s).\n========================\n";
 	#
 	#
 	#	RFAM
@@ -124,28 +107,12 @@ foreach my $family (@rfam_families) {
 		sleep 10;
 		$rfam_families_count--;
 		next;
-
 	}
-	print "Found $count Genes from RFAM for $family family.\n";
+	my @gis = keys (%rfam_result);
+ 	my $no_ids = scalar(@gis);
+	print "Found $count records from RFAM for $family family. ($no_ids individual genes)\n";
 
-	#
-	#
-	# Convert and retrieve NCBI sequences
-	# (Adapted from BioPerl documentation)
-	#
-	my @ids = keys (%rfam_result);
- 	print "IDS ".scalar(@ids)."\n";
-	my $factory = Bio::DB::EUtilities->new(-eutil   => 'efetch',
-                                       -db      => 'nuccore',
-                                       -id      => \@ids,
-                                       -email   => 'joseph@southanuk.co.uk',
-                                       -rettype => 'gi');
- 
-	my @gis = split(m{\n},$factory->get_Response->content);
-
-	foreach my $genes (@gis) {
-		
-	}
+	
 
 	#
 	#
@@ -155,91 +122,56 @@ foreach my $family (@rfam_families) {
 	#NCBI FASTA eghttp://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nucleotide&id=BX248356.1&rettype=fasta
 	#Get the full sequence from the start location
 	print "\n\nRetrieving sequences from NCBI for $family \n========================\n\r";
-	my $fetch_batch = 100;
-	my $gi_no = scalar(@gis);
-	my $g_count = 0;
-	for (my $i = 0; $i < $gi_no; $i += $fetch_batch) {
-		my @get_ids;
-		for (my $j = 0; $j < $fetch_batch; $j++) {
-			if (@gis) {
-				push (@get_ids, pop(@gis));
-				$g_count++;
-			} else {
-				last;
+	my $existing_raw = "../output/raw/$family.txt";
+	my $existing_raw_split ="../output/raw/$family";
+	my $use_existing_raw = 0;
+	my $fetch_result = 0;
+	if (-e $existing_raw or -d $existing_raw_split) {
+		print "Raw files for this family exist. Overwrite?\t";
+		my $overwrite_choice = <STDIN>;
+		chomp $overwrite_choice;
+		if ($overwrite_choice eq "y") {
+			unlink($existing_raw);
+			if (-d $existing_raw_split) {
+				remove_tree($existing_raw_split);
 			}
-		}
-		my $fetch_url = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&rettype=fasta&id=";
-		$fetch_url .= join (",", @get_ids);
-		
-		#die($fetch_url);
-		my $get_fetch_url = get($fetch_url);
-		if ($get_fetch_url) {
-			open (SEQS, ">", "../output/raw/$family.txt") or die "Can't create output file\n";
-			print SEQS ">>First 100\n";
-			print SEQS $get_fetch_url;
-			close SEQS or die "Can't close output file\n";
+			$fetch_result = FetchSeqs(\@gis, $family);
 		} else {
-			print "Error getting the sequences\n";
+			$use_existing_raw = 1; #
 		}
+	} else {
+		$fetch_result = FetchSeqs(\@gis, $family);
 	}
-		my (%ncbi_result,@ncbi_result_fail,$duration);
-	my $result_count = 0;
-	my $fail_count = 0;
-	
-	#print "\n\nGot result_count sequences in $duration seconds. $fail_count failed attemtps.\n";
+
+
+	if (0 == $use_existing_raw) {
+		print "\n\nSplitting GenBank files \n========================\n\r";
+		SplitGenBank($family, $no_ids);
+	}
 
 	#
 	#
 	# Process the sequences
 	#
 	#
-	print "\n\nNow Processing sequences for $family...\n========================\n";
-	my %processed_results;
-	my $process_count = 0;
-	foreach my $keys (keys (%ncbi_result)){
-		print "$process_count\r";
-		my $rfam_start = $rfam_result{$keys}[0];
-		my $rfam_end = $rfam_result{$keys}[1];
-		my $polarity = $rfam_result{$keys}[2];
-
-		if ($polarity eq "-") {
-			#reverse and transwhatsit
-			$ncbi_result{$keys} = reverseSeq($ncbi_result{$keys});
-			#swap the start and stop
-			$rfam_start = $rfam_result{$keys}[1];
-			$rfam_end = $rfam_result{$keys}[0];
+	#Check for existing raw files/existing processed files
+	my $existing_proc = "../output/processed/$family.txt";
+	my $use_existing_proc = 0;
+	if (-e $existing_proc){
+		print "A processed file \"$existing_proc\" exists. Use this?\t";
+		my $overwrite_choice = <STDIN>;
+		chomp $overwrite_choice;
+		if ($overwrite_choice eq "y"){
+			unlink ($existing_proc);
+			processSeqs($family, \%rfam_result);
+		} else{
+			$use_existing_proc = 1;
 		}
-		my $seq_length = $rfam_end-$rfam_start;
-		my $meth_site = index($ncbi_result{$keys}, "ATG", $seq_length);
+	} else {
+		processSeqs($family, \%rfam_result);
+	}
 
-		#print "pol: $polarity rs: $rfam_start, re: $rfam_end, SeqL: $seq_length, meth: $meth_site \n";
-		my $processed_seq = substr ($ncbi_result{$keys}, 0, ($seq_length+($meth_site-$seq_length)+3));
-		$processed_results{$keys} = $processed_seq;
-		$process_count++;
-	}
-	print "\r$process_count Sequences processed\n";
 
-	#
-	#
-	# Output the sequences
-	#
-	#
-	#Output the results to a file
-	print "\n\nOutputting sequences \n========================\n";
-	open (OUTPUT, ">", "../output/processed/$family.txt") or die "Can't create output file\n";
-	foreach my $keys (keys(%processed_results)){
-		print OUTPUT ">$keys\n$processed_results{$keys}\n";
-	}
-	close (OUTPUT) or die "Can't close output file\n";
-	print "\nData output to $family.txt\n";
-	if (@ncbi_result_fail > 0) {
-		open (FAILS, ">", "../output/$family-failed.txt") or die "Can't create output for failed searches\n";
-		print FAILS "This file list sequences that were unable to be retrieved\n";
-		foreach my $failed (@ncbi_result_fail) {
-			print FAILS "$failed\n";
-		}
-		close FAILS or die "Can't close failed searches\n";
-	}
 	$rfam_families_count--;
 	sleep 3;
 }
@@ -249,4 +181,116 @@ sub reverseSeq {
 	$seq =~ tr/acgtrymkbdhvACGTRYMKBDHV/tgcayrkmvhdbTGCAYRKMVHDB/;
 	return $seq;
 }
-	
+sub FetchSeqs {
+	my @gis = @{$_[0]};
+ 	my $family = $_[1];
+ 	my $ua = LWP::UserAgent->new();
+ 	my $fetch_url = "http://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&rettype=gbwithparts&id=";
+
+ 	$fetch_url .= join (",", @gis);
+
+ 	#Progres bar
+ 	#$ua->show_progress('true value
+ 	print "Getting sequences, please wait...\r";
+  	my $start_time = time();
+ 	my $response = $ua->get($fetch_url,':content_file' => "../output/raw/$family.txt");
+ 	if ($response->is_success){
+ 		print "Sequences obtained in @{[time()-$start_time]} seconds\n";
+ 		return 1;
+ 	} else {
+ 		print "Error Retrieving sequences: ".$response->status_list."\n";
+ 		return 0;
+ 	}
+}
+#family, no_ids
+sub SplitGenBank {
+	my ($family, $no_ids) = @_;
+	my $raw_file = Bio::SeqIO->new(-format => 'genbank', -file => "../output/raw/$family.txt");
+	#Create directory
+	make_path("../output/raw/$family");
+
+	#Start splitting the file
+	while (my $seq = $raw_file->next_seq){
+		my $accession = $seq->accession_number;
+		print "Processing $accession\r";
+		my $output = Bio::SeqIO->new(-format => 'genbank', -file => ">../output/raw/$family/$accession.txt", -verbose => -1);
+		$output->write_seq($seq);
+	}
+	print "Done\n";
+}
+#Fam, @gis
+sub processSeqs {
+	my $family = $_[0];
+	my %rfam_result = %{$_[1]};
+	my $processed_count = 0;
+	#Check raw exists
+	my $filename = "../output/raw/$family.txt";
+	my $filename_out = "../output/processed/$family.txt";
+	unless (-e $filename){
+		return "$filename does not exist!\n";
+	}
+	# tie my @raw_file, $filename or die "Can't tie $filename\n";
+	#Change delimiter
+	local $/ = '>';
+	#Read raw file
+	open (RAW, "<", $filename) or die "Can't open $filename\n";
+	my %seqs;
+	while (my $line = <RAW>){
+		my @lines = split "\n", $line;
+		my $info_line = shift(@lines);
+		if ($info_line =~/gi\|(\d+)\|(.*)/){
+			print "$1\n";
+			my $gi = $1;
+			$seqs{$gi} = join ('', @lines);
+			#pop (@lines);
+		}
+		
+	}
+	close (RAW) or die "Can't close $filename\n";
+	open (OUTPUT, ">>", $filename_out);
+	print Dumper $seqs{"AAYA01000006.1"};
+	die;
+	foreach my $fams (keys(%rfam_result)) {
+		#print "fams: $fams \n";
+		#Get the sequence
+		my $sequence = $seqs{$fams};
+		print "$sequence $fams";
+		die;
+		my @fam_arrays = $rfam_result{$fams};
+		# $fam_arrays[$i][0][2];
+		for (my $i = 0; $i < @fam_arrays; $i++) {
+			my @fam_sub_arrays = $fam_arrays[$i];
+			for (my $j = 0; $j < @fam_sub_arrays; $j++) {
+				my $start = $fam_arrays[$i][$j][0];
+				my $end = $fam_arrays[$i][$j][1];
+				my $pol = $fam_arrays[$i][$j][2];
+				#print "\t$start $end $pol\n";
+				if ($pol eq "-") {
+					#reverse and transwhatsit
+					##$ncbi_result{$keys} = reverseSeq($ncbi_result{$keys});
+					#swap the start and stop
+					$start = $fam_arrays[$i][$j][1];
+					$end = $fam_arrays[$i][$j][0];
+				}
+				my $seq_length = $end-$start;
+				my $meth_site = index($sequence, "ATG", $end);
+
+				#print "pol: $polarity rs: $rfam_start, re: $rfam_end, SeqL: $seq_length, meth: $meth_site \n";    
+				my $processed_seq = substr ($sequence, $start, ($seq_length+($meth_site-$seq_length)+3));
+				print OUTPUT $processed_seq;
+				#$process_count++;
+			}
+		}	
+	}
+	close (OUTPUT) or die "Can't close $filename_out\n";
+	# print "Files processed, remove raw sequence file?\t";
+	# my $choice = <STDIN>;
+	# chomp $choice;
+	# if ($choice eq "y") {
+	# 	unlink ("../output/raw/$family.txt");
+	# 	print "\nFile deleted.\n";
+	# } else {
+	# 	print "Processed files avaliable in ../output/processed/$family.txt\n";
+	# 	last;
+	# }
+}
