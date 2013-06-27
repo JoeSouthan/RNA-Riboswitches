@@ -39,7 +39,6 @@ sub FetchRFAM {
 	my (%rfam_result, @rfam_families);
 	my ($count, $exist_count) = (0, 0);
 
-
 	my $rfam_url = get ("http://rfam.sanger.ac.uk/family/$family/alignment/$mode/stockholm?alnType=$mode&nseLabels=0&cs=0");
 
 	if ($rfam_url) {
@@ -57,7 +56,7 @@ sub FetchRFAM {
 			if ($rfam_result{$1}){
 				#print "$1 exists already, adding to to existing key";
 				my @sub_result = [ @locs ];
-				push( @{ $rfam_result{$1}}, @sub_result); 
+				push( @{$rfam_result{$1}}, @sub_result); 
 				$exist_count++;
 			} else {
 				my @sub_result = [@locs];
@@ -68,9 +67,8 @@ sub FetchRFAM {
 		return (\%rfam_result, $count);
 	} else {
 		print "$family Get Failed\n";
-		#sleep 10;
-		#$rfam_families_count--;
-		return (0);
+		$rfam_result{"error"} = 1;
+		return (\%rfam_result, 0);
 	}
 }
 

@@ -51,6 +51,9 @@ use Notices;
 			print "\n\nRetrieving $mode alignments from RFAM\n========================\n";
 				my @rfam_result_ref = FetchRFAM($family, $mode);
 				my %rfam_result = %{$rfam_result_ref[0]};
+
+				next if (defined($rfam_result{"error"}));
+
 				my @gis = keys (%rfam_result);
 	 			my $no_ids = scalar(@gis);
 			print "Found $rfam_result_ref[1] records from RFAM for $family family. ($no_ids individual genes)\n";
@@ -66,7 +69,7 @@ use Notices;
 		#
 			if (0 == $ncbi_result) {
 				Note(1);
-				SplitGenBank($family, $no_ids);
+				SplitGenBank($family);
 			}
 
 		#
@@ -77,3 +80,5 @@ use Notices;
 		$rfam_families_count--;
 		sleep 3;
 	}
+
+print "\n\n========================\nAll sequences obtained\n";

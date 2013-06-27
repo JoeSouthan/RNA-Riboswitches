@@ -10,26 +10,32 @@ use strict;
 use Data::Dumper;
 use Bio::SeqIO;
 use File::Path qw(make_path remove_tree);
+use Tie::File;
 
 use Exporter;
 our @ISA = qw(Exporter);
 our @EXPORT = qw (SplitGenBank ProcessSequences);
 
-#family, no_ids
+#family
 sub SplitGenBank {
-	my ($family, $no_ids) = @_;
-	my $raw_file = Bio::SeqIO->new(-format => 'genbank', -file => "../output/raw/$family.txt");
+	my $family = $_[0];
 
 	#Create directory
 	make_path("../output/raw/$family");
 
-	#Start splitting the file
-	while (my $seq = $raw_file->next_seq){
-		my $accession = $seq->accession_number;
-		print "Processing $accession\r";
-		my $output = Bio::SeqIO->new(-format => 'genbank', -file => ">../output/raw/$family/$accession.txt", -verbose => -1);
-		$output->write_seq($seq);
+	tie my @genbank_file, 'Tie::File', "../output/raw/$family.txt", recsep => "//\n";
+	foreach my $gb (@genbank_file) {
+		my $acc = ($gb =~ /LOCUS\s+([A-Z0-9.]+)\s/g) ? $1 : 0;
+		unless (0 eq $acc) {
+			print "Outputting: $acc\r";
+			open (OUT, ">", "../output/raw/$family/$acc.txt") or die ("Can't open output for $acc\n");
+			print OUT $gb . "//\n";
+			close (OUT) or die ("Can't close output for $acc\n");
+		} else {
+			print "Can't get accession!\n";
+		}
 	}
+
 	print "\nDone\n";
 }
 
