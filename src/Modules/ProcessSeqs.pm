@@ -11,10 +11,11 @@ use Data::Dumper;
 use Bio::SeqIO;
 use File::Path qw(make_path remove_tree);
 use Tie::File;
+use JSON;
 
 use Exporter;
 our @ISA = qw(Exporter);
-our @EXPORT = qw (SplitGenBank ProcessSequences);
+our @EXPORT = qw (SplitGenBank ProcessSeqs);
 
 #family
 sub SplitGenBank {
@@ -29,7 +30,7 @@ sub SplitGenBank {
 		unless (0 eq $acc) {
 			print "Outputting: $acc\r";
 			open (OUT, ">", "../output/raw/$family/$acc.txt") or die ("Can't open output for $acc\n");
-			print OUT $gb . "//\n";
+			print OUT $gb . "\n//\n";
 			close (OUT) or die ("Can't close output for $acc\n");
 		} else {
 			print "Can't get accession!\n";
@@ -40,108 +41,187 @@ sub SplitGenBank {
 }
 
 #$family, %result
-sub ProcessSequences {
-	my $family = $_[0];
-	my %rfam_result = %{$_[1]};
+# sub ProcessSequences {
+# 	my $family = $_[0];
+# 	my %rfam_result = %{$_[1]};
 
-	#Check for existing raw files/existing processed files
-	my $existing_proc = "../output/processed/$family.txt";
-	my $use_existing_proc = 0;
-	if (-e $existing_proc){
-		print "A processed file \"$existing_proc\" exists. Use this?\t";
-		my $overwrite_choice = <STDIN>;
-		chomp $overwrite_choice;
-		if ($overwrite_choice eq "y"){
-			unlink ($existing_proc);
-			_processSeqs($family, \%rfam_result);
-		} else{
-			$use_existing_proc = 1;
-		}
-	} else {
-		_processSeqs($family, \%rfam_result);
-	}
-}
+# 	#Check for existing raw files/existing processed files
+# 	my $existing_proc = "../output/processed/$family.txt";
+# 	my $use_existing_proc = 0;
+# 	if (-e $existing_proc){
+# 		print "A processed file \"$existing_proc\" exists. Use this?\t";
+# 		my $overwrite_choice = <STDIN>;
+# 		chomp $overwrite_choice;
+# 		if ($overwrite_choice eq "y"){
+# 			unlink ($existing_proc);
+# 			_processSeqs($family, \%rfam_result);
+# 		} else{
+# 			$use_existing_proc = 1;
+# 		}
+# 	} else {
+# 		_processSeqs($family, \%rfam_result);
+# 	}
+# }
 
 #Fam, @gis
-sub _processSeqs {
+sub ProcessSeqs {
 	my $family = $_[0];
 	my %rfam_result = %{$_[1]};
-	my $processed_count = 0;
-	#Check raw exists
-	my $filename = "../output/raw/$family.txt";
-	my $filename_out = "../output/processed/$family.txt";
-	unless (-e $filename){
-		return "$filename does not exist!\n";
-	}
-	# tie my @raw_file, $filename or die "Can't tie $filename\n";
-	#Change delimiter
-	local $/ = '>';
-	#Read raw file
-	open (RAW, "<", $filename) or die "Can't open $filename\n";
-	my %seqs;
-	while (my $line = <RAW>){
-		my @lines = split "\n", $line;
-		my $info_line = shift(@lines);
-		if ($info_line =~/gi\|(\d+)\|(.*)/){
-			print "$1\n";
-			my $gi = $1;
-			$seqs{$gi} = join ('', @lines);
-			#pop (@lines);
-		}
+	my %stats = (
+		"RS_Neg" => 0,
+		"RS_Pos" => 0,
+		"CDS_NoName" => 0
+	);
+	for my $rfam_fam (keys %rfam_result) {
+		#Load the genbank file
+		my $fam_mod = $1 if $rfam_fam =~/(.*)\./;
 		
-	}
-	close (RAW) or die "Can't close $filename\n";
-	open (OUTPUT, ">>", $filename_out);
-	print Dumper $seqs{"AAYA01000006.1"};
-	die;
-	foreach my $fams (keys(%rfam_result)) {
-		#print "fams: $fams \n";
-		#Get the sequence
-		my $sequence = $seqs{$fams};
-		print "$sequence $fams";
-		die;
-		my @fam_arrays = $rfam_result{$fams};
-		# $fam_arrays[$i][0][2];
-		for (my $i = 0; $i < @fam_arrays; $i++) {
-			my @fam_sub_arrays = $fam_arrays[$i];
-			for (my $j = 0; $j < @fam_sub_arrays; $j++) {
-				my $start = $fam_arrays[$i][$j][0];
-				my $end = $fam_arrays[$i][$j][1];
-				my $pol = $fam_arrays[$i][$j][2];
-				#print "\t$start $end $pol\n";
-				if ($pol eq "-") {
-					#reverse and transwhatsit
-					##$ncbi_result{$keys} = _reverseSeq($ncbi_result{$keys});
-					#swap the start and stop
-					$start = $fam_arrays[$i][$j][1];
-					$end = $fam_arrays[$i][$j][0];
-				}
-				my $seq_length = $end-$start;
-				my $meth_site = index($sequence, "ATG", $end);
+		print "\nProcessing $fam_mod\n";
+		#BioPerl Object
+		eval { 
+			my $gb_io = Bio::SeqIO->new(-format => 'genbank', -file => "../output/raw/$family/$fam_mod.txt" ); 
+			my $seq_ob = $gb_io->next_seq;
+			my $full_Seq = $seq_ob->seq;
 
-				#print "pol: $polarity rs: $rfam_start, re: $rfam_end, SeqL: $seq_length, meth: $meth_site \n";    
-				my $processed_seq = substr ($sequence, $start, ($seq_length+($meth_site-$seq_length)+3));
-				print OUTPUT $processed_seq;
-				#$process_count++;
+			#Counts for loop
+			my $count = 0;
+			my $cds_count = 0;
+			my %gb_cds;
+			for my $feature ($seq_ob->get_SeqFeatures) {
+				if ($feature->primary_tag eq "CDS") {
+					#Get the gene name 
+					my $gene_name;
+					if ($feature->has_tag("gene")){
+						for my $val ($feature->get_tag_values("gene")){
+							$gene_name = $val;
+						}
+					} else {
+						$gene_name = $count;
+						$count++;
+						$stats{"CDS_NoName"}++;
+					}
+					#Package the features
+					my @feat_array = ($feature->start, $feature->end);
+					$gb_cds{$gene_name} = \@feat_array;
+					$cds_count++;
+				}
 			}
-		}	
+			$stats{"CDS_Count"} = $cds_count;
+			#Just in case there is no CDS in the file
+				for my $rs ($rfam_result{$rfam_fam}){
+					my $fam_count = 0;
+					foreach my $rbs (@{$rs}){
+						my $rfam_start = @{$rbs}[0];
+						my $rfam_end = @{$rbs}[1];
+						my $local_seq = $full_Seq;
+						if (0 == $cds_count) {
+							#There are no CDS
+							print " No features in the GenBank file. Predicting instead...\n";
+							my $local_seq = $full_Seq;
+							if ("-" eq @{$rbs}[2]){
+								$local_seq = _reverseSeq($local_seq);
+								$rfam_start = @{$rbs}[1];
+								$rfam_end = @{$rbs}[0];
+								$stats{"RS_Neg"}++
+							} else {
+								$stats{"RS_Pos"}++;
+							}
+							my $proc_seq = _CutSeqPredict($rfam_end, $local_seq, $rfam_start);
+							_OutputProc ($family, $proc_seq, $fam_count, $rfam_fam, "");
+
+							my @stat_array = $rfam_fam.$fam_count;
+							$stats{"CDS_Fam_NoFeat"} = \@stat_array;
+							
+
+						} else {
+
+							#There are CDS
+							my $current_lowest = 999999;
+							my $chosen_locus;
+
+							#If negative, reverse the numbers and sequence
+							if ("-" eq @{$rbs}[2]){
+								$local_seq = _reverseSeq($local_seq);
+								$rfam_start = @{$rbs}[1];
+								$rfam_end = @{$rbs}[0];
+								$stats{"RS_Neg"}++;
+							} else {
+								$stats{"RS_Pos"}++;
+							}
+
+							#Go through the GenBank File
+							for my $locus (keys (%gb_cds)){
+								my $difference = $gb_cds{$locus}[0]-$rfam_start;
+								if ($current_lowest > $difference and $difference >= 0 ) {
+									$current_lowest = $difference;
+									$chosen_locus = $locus;
+								}
+							}
+
+							# In the case where there are no substantial differences 
+							# between the genes, send it for prediction instead
+							if (!defined($chosen_locus)) {
+								print " No significant differences, predicting...\n";
+								my $proc_seq = _CutSeqPredict($rfam_end, $local_seq, $rfam_start);
+								_OutputProc ($family, $proc_seq, $fam_count, $rfam_fam, "");
+							} else {
+								my $length_req = (abs($rfam_end-$rfam_start))+$current_lowest;
+								print " Chosen locus $chosen_locus at difference $current_lowest length $length_req rfamlength".abs($rfam_end-$rfam_start)."\n";
+								my $proc_seq = _CutSeq($rfam_start, $length_req, $local_seq);
+								_OutputProc ($family, $proc_seq, $fam_count, $rfam_fam, $chosen_locus);
+							}
+						}
+						$fam_count++;
+					}
+				}
+		};
+		#print "*Can't open sequence for $rfam_fam $@\n" if $@;
+		print "*Can't open sequence for $rfam_fam\n" if $@;
+		#Error handling? 
 	}
-	close (OUTPUT) or die "Can't close $filename_out\n";
-	# print "Files processed, remove raw sequence file?\t";
-	# my $choice = <STDIN>;
-	# chomp $choice;
-	# if ($choice eq "y") {
-	# 	unlink ("../output/raw/$family.txt");
-	# 	print "\nFile deleted.\n";
-	# } else {
-	# 	print "Processed files avaliable in ../output/processed/$family.txt\n";
-	# 	last;
-	# }
+	_OutputStats(\%stats, $family);
 }
 #Reverses a sequence 
 sub _reverseSeq {
 	my $seq = $_[0];
 	$seq =~ tr/acgtrymkbdhvACGTRYMKBDHV/tgcayrkmvhdbTGCAYRKMVHDB/;
 	return $seq;
+}
+sub _CutSeq {
+	my ($rfam_start, $length_req, $seq) = @_;
+	my $processed_seq = substr ($seq, $rfam_start, $length_req+3 );
+	return $processed_seq;
+}
+sub _CutSeqPredict {
+	my $rfam_end = $_[0];
+	my $seq = $_[1];
+	my $rfam_start = $_[2];
+
+	my $meth_site = index($seq, "ATG", $rfam_end);
+	my $seq_length = (abs($rfam_end-$rfam_start))+($rfam_end-$meth_site);
+	my $processed_seq = substr ($seq, $rfam_start, $seq_length);
+	return $processed_seq;
+}
+sub _OutputProc {
+	my ($family, $processed_seq, $fam_count, $rfam_fam, $locus)  = @_;
+	make_path("../output/processed/$family");
+
+	my $filename = $rfam_fam."_".$fam_count;
+	open (OUTPUT, ">", "../output/processed/$family/$filename.txt") or die "Can't create output file\n";
+	print OUTPUT ">$filename | ".length($processed_seq)."bp | $locus\n";
+	print OUTPUT $processed_seq."\n";
+	close OUTPUT or die "Can't close output\n";
+}
+sub _OutputStats {
+	my %stats = %{$_[0]};
+	my $family = $_[1];
+	my $json = JSON->new;
+	my $encoded = $json->pretty->encode(\%stats);
+
+	make_path("../output/stats");
+
+	open (STATS, ">", "../output/stats/$family.txt") or die "Can't create Stats\n";
+	print STATS $encoded;
+	close STATS or die "Can't close stat file\n";
 }
 1;

@@ -15,7 +15,7 @@ use File::Path qw(make_path remove_tree);
 use Notices;
 use Exporter;
 our @ISA = qw(Exporter);
-our @EXPORT = qw (FetchRFAM FetchNCBI OpenSearch);
+our @EXPORT = qw (FetchRFAM FetchNCBI OpenSearch RFAM_ErrorOut);
 
 sub OpenSearch {
 	my ($search_file) = @_;
@@ -24,7 +24,7 @@ sub OpenSearch {
 	open (SEARCHES, "<", $search_file) or Error(2);
 	while (my $line = <SEARCHES>){
 		chomp ($line);
-		push (@rfam_families, $line);
+		push (@rfam_families, $line) if (length ($line) > 2);
 	}
 	close (SEARCHES) or Error(3);
 	return \@rfam_families;
@@ -114,5 +114,10 @@ sub _FetchSeqs {
  		print "Error Retrieving sequences: ".$response->status_list."\n";
  		return 0;
  	}
+}
+sub RFAM_ErrorOut {
+	open (ERROR, ">>", "RFAM_Failed.txt") or die ("Can't open error output\n");
+	print ERROR localtime().": $_[0] failed to download\n";
+	close ERROR or die ("Can't close error output\n");
 }
 1;

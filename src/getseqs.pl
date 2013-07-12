@@ -52,7 +52,14 @@ use Notices;
 				my @rfam_result_ref = FetchRFAM($family, $mode);
 				my %rfam_result = %{$rfam_result_ref[0]};
 
-				next if (defined($rfam_result{"error"}));
+				if (defined($rfam_result{"error"})) {
+					RFAM_ErrorOut($family);
+					$rfam_families_count--;
+					next;
+				}
+
+				# RFAM_ErrorOut($family) if (defined($rfam_result{"error"}));
+				# next if (defined($rfam_result{"error"}));
 
 				my @gis = keys (%rfam_result);
 	 			my $no_ids = scalar(@gis);
@@ -67,17 +74,16 @@ use Notices;
 		#
 		#	Split GenBank file
 		#
-			if (0 == $ncbi_result) {
-				Note(1);
-				SplitGenBank($family);
-			}
+			Note(1);
+			SplitGenBank($family);
 
 		#
 		# Process the sequences
 		#
-			ProcessSequences($family, \%rfam_result);
+			ProcessSeqs($family, \%rfam_result);
 
 		$rfam_families_count--;
+		print "$family complete, moving on.\n";
 		sleep 3;
 	}
 
