@@ -23,10 +23,10 @@ sub SplitGenBank {
 
 	#Create directory
 	make_path("../output/raw/$family");
-
+	my $count = 0; 
 	tie my @genbank_file, 'Tie::File', "../output/raw/$family.txt", recsep => "//\n";
 	foreach my $gb (@genbank_file) {
-		my $acc = ($gb =~ /LOCUS\s+([A-Z0-9.]+)\s/g) ? $1 : 0;
+		my $acc = ($gb =~ /VERSION\s+([A-Z0-9.]+)\s+/) ? $1 : 0;
 		unless (0 eq $acc) {
 			print "Outputting: $acc\r";
 			open (OUT, ">", "../output/raw/$family/$acc.txt") or die ("Can't open output for $acc\n");
@@ -34,6 +34,10 @@ sub SplitGenBank {
 			close (OUT) or die ("Can't close output for $acc\n");
 		} else {
 			print "Can't get accession!\n";
+			open (OUT, ">", "../output/raw/$family/$count.txt") or die ("Can't open output for $count\n");
+			print OUT $gb . "\n//\n";
+			close (OUT) or die ("Can't close output for $count\n");
+			$count++;
 		}
 	}
 
@@ -79,7 +83,7 @@ sub ProcessSeqs {
 		print "\nProcessing $fam_mod\n";
 		#BioPerl Object
 		eval { 
-			my $gb_io = Bio::SeqIO->new(-format => 'genbank', -file => "../output/raw/$family/$fam_mod.txt" ); 
+			my $gb_io = Bio::SeqIO->new(-format => 'genbank', -file => "../output/raw/$family/$rfam_fam.txt" ); 
 			my $seq_ob = $gb_io->next_seq;
 			my $full_Seq = $seq_ob->seq;
 
